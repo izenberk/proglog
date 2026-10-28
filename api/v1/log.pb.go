@@ -269,7 +269,7 @@ const file_api_v1_log_proto_rawDesc = "" +
 	"\aProduce\x12\x16.log.v1.ProduceRequest\x1a\x17.log.v1.ProduceResponse\"\x00\x12<\n" +
 	"\aConsume\x12\x16.log.v1.ConsumeRequest\x1a\x17.log.v1.ConsumeResponse\"\x00\x12D\n" +
 	"\rConsumeStream\x12\x16.log.v1.ConsumeRequest\x1a\x17.log.v1.ConsumeResponse\"\x000\x01\x12F\n" +
-	"\rProduceStream\x12\x16.log.v1.ProduceRequest\x1a\x17.log.v1.ProduceResponse\"\x00(\x010\x01B%Z#github.com/travisjeffery/api/log_v1b\x06proto3"
+	"\rProduceStream\x12\x16.log.v1.ProduceRequest\x1a\x17.log.v1.ProduceResponse\"\x00(\x010\x01B Z\x1egithub.com/izenberk/api/log_v1b\x06proto3"
 
 var (
 	file_api_v1_log_proto_rawDescOnce sync.Once
