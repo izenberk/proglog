@@ -1,0 +1,19 @@
+{
+  "CN": "Proglog Root CA",
+  "key": {
+    "algo": "rsa",
+    "size": 2048
+  },
+  "names": [
+    {
+      "C": "TH",
+      "ST": "Nonthaburi",
+      "L": "Bang Phlap",
+      "O": "Proglog Lab",
+      "OU": "Distributed Systems"
+    }
+  ],
+  "ca": {
+    "expiry": "87600h"
+  }
+}
