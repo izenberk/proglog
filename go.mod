@@ -10,6 +10,7 @@ require (
 )
 
 require (
+<<<<<<< HEAD
 	filippo.io/edwards25519 v1.1.0 // indirect
 	github.com/cloudflare/cfssl v1.7.1 // indirect
 	github.com/go-logr/logr v1.4.1 // indirect
@@ -29,4 +30,13 @@ require (
 	golang.org/x/net v0.22.0 // indirect
 	golang.org/x/text v0.14.0 // indirect
 	k8s.io/klog/v2 v2.120.1 // indirect
+=======
+	go.yaml.in/yaml/v3 v3.0.5 // indirect
+	golang.org/x/net v0.57.0 // indirect
+	golang.org/x/sys v0.47.0 // indirect
+	golang.org/x/text v0.40.0 // indirect
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20260706201446-f0a921348800 // indirect
+	google.golang.org/grpc v1.84.0 // indirect
+	google.golang.org/grpc/cmd/protoc-gen-go-grpc v1.6.2 // indirect
+>>>>>>> 33e3321491934f810cc3546de928dc94237ce597
 )
