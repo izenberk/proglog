@@ -50,6 +50,9 @@ func (i *index) Close() error {
 	if err := i.file.Sync(); err != nil {
 		return err
 	}
+	if err := i.mmap.UnsafeUnmap(); err != nil {
+		return err
+	}
 	if err := i.file.Truncate(int64(i.size)); err != nil {
 		return err
 	}
