@@ -2,14 +2,29 @@ package server
 
 import (
 	"context"
+	"strings"
+	"time"
 
-	api "github.com/izenberk/proglog/api/v1"
 	grpc_auth "github.com/grpc-ecosystem/go-grpc-middleware/v2/interceptors/auth"
+	"github.com/grpc-ecosystem/go-grpc-middleware/v2/interceptors/logging"
+	api "github.com/izenberk/proglog/api/v1"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
+
+	// OpenTelemetry (replaces OpenCensus)
+	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/metric"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/trace"
+
+	// Zap (unchanged)
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 )
 
 type Config struct {
@@ -29,6 +44,25 @@ func NewGRPCServer(config *Config, opts ...grpc.ServerOption) (
 	*grpc.Server,
 	error,
 ) {
+	logger := zap.L().Named("server")
+	zapOtps := []logging.Option{
+		logging.WithLogOnEvents(logging.FinishCall),
+		logging.WithDurationField(func (duration time.Duration) logging.Fields {
+			return logging.Fields{
+				"grpc.time_ns", duration.Nanoseconds(),
+			}
+		}),
+	}
+
+	customSampler := NewProducePrioritySampler(0.5)
+
+	tp := sdktrace.NewTracerProvider(
+		sdktrace.WithSampler(sdktrace.AlwaysSample()),
+	)
+	otel.SetTracerProvider(tp)
+
+	mp := sdkmetric.New
+
 	opts = append(opts, grpc.StreamInterceptor(
 			grpc_auth.StreamServerInterceptor(authenticate),
 		),
@@ -165,3 +199,27 @@ func subject(ctx context.Context) string {
 }
 
 type subjectContextKey struct{}
+
+type ProducePrioritySampler struct {
+	halfSampler sdktrace.Sampler
+}
+
+func NewProducePrioritySampler(ratio float64) sdktrace.Sampler {
+	return &ProducePrioritySampler{
+		halfSampler: sdktrace.TraceIDRatioBased(ratio),
+	}
+}
+
+func (s *ProducePrioritySampler) ShouldSample(p sdktrace.SamplingParameters) sdktrace.SamplingResult {
+	if strings.Contains(p.Name, "Produce") {
+		return sdktrace.SamplingResult{
+			Decision: sdktrace.RecordAndSample,
+		}
+	}
+
+	return s.halfSampler.ShouldSample(p)
+}
+
+func (s *ProducePrioritySampler) Description() string {
+	return "ProducePrioritySampler{Produce=1.0, Others=0.5}"
+}
