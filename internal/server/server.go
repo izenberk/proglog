@@ -2,7 +2,7 @@ package server
 
 import (
 	"context"
-	"strings"
+	"fmt"
 	"time"
 
 	grpc_auth "github.com/grpc-ecosystem/go-grpc-middleware/v2/interceptors/auth"
@@ -17,14 +17,11 @@ import (
 	// OpenTelemetry (replaces OpenCensus)
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"go.opentelemetry.io/otel"
-	"go.opentelemetry.io/otel/metric"
-	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/trace"
 
 	// Zap (unchanged)
 	"go.uber.org/zap"
-	"go.uber.org/zap/zapcore"
 )
 
 type Config struct {
@@ -45,8 +42,20 @@ func NewGRPCServer(config *Config, opts ...grpc.ServerOption) (
 	error,
 ) {
 	logger := zap.L().Named("server")
-	zapOtps := []logging.Option{
+
+	logTraceID := func(ctx context.Context) logging.Fields {
+		if span := trace.SpanContextFromContext(ctx); span.IsSampled() {
+			return logging.Fields{
+				"trace_id", span.TraceID().String(),
+				"span_id", span.SpanID().String(),
+			}
+		}
+		return nil
+	}
+
+	logOtps := []logging.Option{
 		logging.WithLogOnEvents(logging.FinishCall),
+		logging.WithFieldsFromContext(logTraceID),
 		logging.WithDurationField(func (duration time.Duration) logging.Fields {
 			return logging.Fields{
 				"grpc.time_ns", duration.Nanoseconds(),
@@ -54,21 +63,22 @@ func NewGRPCServer(config *Config, opts ...grpc.ServerOption) (
 		}),
 	}
 
-	customSampler := NewProducePrioritySampler(0.5)
 
 	tp := sdktrace.NewTracerProvider(
 		sdktrace.WithSampler(sdktrace.AlwaysSample()),
 	)
 	otel.SetTracerProvider(tp)
 
-	mp := sdkmetric.New
 
-	opts = append(opts, grpc.StreamInterceptor(
+	opts = append(opts, grpc.ChainStreamInterceptor(
+			logging.StreamServerInterceptor(InterceptorLogger(logger), logOtps...),
 			grpc_auth.StreamServerInterceptor(authenticate),
 		),
 		grpc.ChainUnaryInterceptor(
+			logging.UnaryServerInterceptor(InterceptorLogger(logger), logOtps...),
 			grpc_auth.UnaryServerInterceptor(authenticate),
 		),
+		grpc.StatsHandler(otelgrpc.NewServerHandler()),
 	)
 	gsrv := grpc.NewServer(opts...)
 	srv, err := newgrpcServer(config)
@@ -200,26 +210,41 @@ func subject(ctx context.Context) string {
 
 type subjectContextKey struct{}
 
-type ProducePrioritySampler struct {
-	halfSampler sdktrace.Sampler
-}
+func InterceptorLogger(l *zap.Logger) logging.Logger {
+	return logging.LoggerFunc(func(ctx context.Context, lvl logging.Level, msg string, fields ...any) {
+		f := make([]zap.Field, 0, len(fields)/2)
 
-func NewProducePrioritySampler(ratio float64) sdktrace.Sampler {
-	return &ProducePrioritySampler{
-		halfSampler: sdktrace.TraceIDRatioBased(ratio),
-	}
-}
+		for i := 0; i < len(fields); i += 2 {
+			key := fields[i].(string)
+			value := fields[i+1]
 
-func (s *ProducePrioritySampler) ShouldSample(p sdktrace.SamplingParameters) sdktrace.SamplingResult {
-	if strings.Contains(p.Name, "Produce") {
-		return sdktrace.SamplingResult{
-			Decision: sdktrace.RecordAndSample,
+			switch v := value.(type) {
+			case string:
+				f = append(f, zap.String(key, v))
+			case int:
+				f = append(f, zap.Int(key, v))
+			case int64:
+				f = append(f, zap.Int64(key, v)) // Catches duration.Nanoseconds()!
+			case bool:
+				f = append(f, zap.Bool(key, v))
+			default:
+				f = append(f, zap.Any(key, v))
+			}
 		}
-	}
 
-	return s.halfSampler.ShouldSample(p)
-}
+		logger := l.WithOptions(zap.AddCallerSkip(1)).With(f...)
 
-func (s *ProducePrioritySampler) Description() string {
-	return "ProducePrioritySampler{Produce=1.0, Others=0.5}"
+		switch lvl {
+		case logging.LevelDebug:
+			logger.Debug(msg)
+		case logging.LevelInfo:
+			logger.Info(msg)
+		case logging.LevelWarn:
+			logger.Warn(msg)
+		case logging.LevelError:
+			logger.Error(msg)
+		default:
+			panic(fmt.Sprintf("unknown level %v", lvl))
+		}
+	})
 }
