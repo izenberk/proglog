@@ -2,9 +2,11 @@ package server
 
 import (
 	"context"
+	"flag"
 	"net"
 	"os"
 	"testing"
+	"time"
 
 	api "github.com/izenberk/proglog/api/v1"
 	"github.com/izenberk/proglog/internal/auth"
@@ -15,7 +17,28 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/status"
+
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/exporters/stdout/stdoutmetric"
+	"go.opentelemetry.io/otel/exporters/stdout/stdouttrace"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.uber.org/zap"
 )
+
+var debug = flag.Bool("debug", false, "Enable observability for debugging.")
+
+func TestMain(m *testing.M) {
+	flag.Parse()
+	if *debug {
+		logger, err := zap.NewDevelopment()
+		if err != nil {
+			panic(err)
+		}
+		zap.ReplaceGlobals(logger)
+	}
+	os.Exit(m.Run())
+}
 
 func TestServer(t *testing.T) {
 	for scenario, fn := range map[string]func(
@@ -104,6 +127,11 @@ func setupTest(t *testing.T, fn func(*Config)) (
 	if fn != nil {
 		fn(cfg)
 	}
+	var stopTelemetry func()
+	if *debug {
+		stopTelemetry = setupTelemetry(t)
+	}
+
 	server, err := NewGRPCServer(cfg, grpc.Creds(serverCreds))
 	require.NoError(t, err)
 
@@ -116,7 +144,10 @@ func setupTest(t *testing.T, fn func(*Config)) (
 		rootConn.Close()
 		nobodyConn.Close()
 		l.Close()
-		clog.Close()
+		if stopTelemetry != nil {
+			stopTelemetry()
+		}
+		clog.Remove()
 	}
 }
 
@@ -168,8 +199,8 @@ func testComsumePastBoundary(
 	if consume != nil {
 		t.Fatal("consume not nil")
 	}
-	got := grpc.Code(err)
-	want := grpc.Code(api.ErrOffsetOutOfRange{}.GRPCStatus().Err())
+	got := status.Code(err)
+	want := status.Code(api.ErrOffsetOutOfRange{}.GRPCStatus().Err())
 	if got != want {
 		t.Fatalf("got err: %v, want: %v", got, want)
 	}
@@ -260,4 +291,47 @@ gotCode, wantCode = status.Code(err), codes.PermissionDenied
 if gotCode != wantCode {
 t.Fatalf("got code: %d, want: %d", gotCode, wantCode)
 }
+}
+
+// Helper function to initialize OTel
+func setupTelemetry(t *testing.T) func() {
+	metricsLogFile, err := os.CreateTemp("", "metrics-*.log")
+	require.NoError(t, err)
+	t.Logf("metrics log file: %s", metricsLogFile.Name())
+
+	tracesLogFile, err := os.CreateTemp("", "traces-*.log")
+	require.NoError(t, err)
+	t.Logf("traces log file: %s", tracesLogFile.Name())
+
+	traceExporter, err := stdouttrace.New(
+		stdouttrace.WithWriter(tracesLogFile),
+		stdouttrace.WithPrettyPrint(),
+	)
+	require.NoError(t, err)
+
+	tp := sdktrace.NewTracerProvider(
+		sdktrace.WithSampler(sdktrace.ParentBased(sdktrace.AlwaysSample())),
+		sdktrace.WithBatcher(traceExporter),
+	)
+	otel.SetTracerProvider(tp)
+
+	metricExporter, err := stdoutmetric.New(stdoutmetric.WithWriter(metricsLogFile))
+	require.NoError(t, err)
+
+	mp := sdkmetric.NewMeterProvider(
+		sdkmetric.WithReader(sdkmetric.NewPeriodicReader(
+			metricExporter,
+			sdkmetric.WithInterval(1*time.Second),
+		)),
+	)
+	otel.SetMeterProvider(mp)
+
+	return func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = tp.Shutdown(ctx)
+		_ = mp.Shutdown(ctx)
+		_ = tracesLogFile.Close()
+		_ = metricsLogFile.Close()
+	}
 }

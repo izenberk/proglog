@@ -64,10 +64,13 @@ func NewGRPCServer(config *Config, opts ...grpc.ServerOption) (
 	}
 
 
-	tp := sdktrace.NewTracerProvider(
-		sdktrace.WithSampler(sdktrace.AlwaysSample()),
-	)
-	otel.SetTracerProvider(tp)
+	if _, ok := otel.GetTracerProvider().(*sdktrace.TracerProvider); !ok {
+		tp := sdktrace.NewTracerProvider(
+			sdktrace.WithSampler(sdktrace.AlwaysSample()),
+		)
+
+		otel.SetTracerProvider(tp)
+	}
 
 
 	opts = append(opts, grpc.ChainStreamInterceptor(
